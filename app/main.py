@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import engine, Base, get_db
 from app.migrations import run_migrations
-from app.models.user_model import User  # noqa: F401 - registers the table
+from app.models.user_model import User
 from app.routes.demo_routes import router as demo_router
 from app.routes.user_routes import router as user_router
 
