@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import engine, Base, get_db
 from app.migrations import run_migrations
-from app.models.user_model import User  # noqa: F401 - registers the table
+from app.models.user_model import User
 from app.routes.demo_routes import router as demo_router
 from app.routes.user_routes import router as user_router
 
@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 
 app = FastAPI(
-    title="Secure User Management API",
+    title="AccessHub API",
     description=(
         "A production-style API for authentication, "
         "user management and role-based access control."
@@ -32,6 +32,8 @@ origins = [
     "http://192.0.0.2:5175",
 
     "https://jwt-authentication-dashboard-sepia.vercel.app",
+    "https://accesshub-7jy6awsnz-iris408.vercel.app",
+
 ]
 
 app.add_middleware(
@@ -55,7 +57,7 @@ app.include_router(demo_router)
 @app.get("/")
 def root():
     return {
-        "message": "Secure User Management API is running",
+        "message": "AccessHub API is running",
         "status": "ok",
         "docs": "/docs"
     }
