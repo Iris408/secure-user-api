@@ -21,16 +21,19 @@ JWT backend deployed on Render:
 | FastAPI backend | ✅ Complete | Docker support | ✅ Complete |
 | PostgreSQL database | ✅ Connected | Render deployment | ✅ Live |
 | SQLAlchemy ORM | ✅ Complete | Swagger API documentation | ✅ Available |
-| JWT authentication | ✅ Working | Backend tests | ✅ Basic coverage added |
+| JWT authentication | ✅ Working | Backend tests | ✅ Auth, roles and user lifecycle |
 | Password hashing | ✅ Working | Backend CI | ✅ Passing |
 | Role-based access control | ✅ Working | Docker CI | ✅ Passing |
 
 
 ## Features
 
-- JWT authentication
-- Role-based access control
-- Protected user and administrator endpoints
+- JWT authentication, checked against the database on every request
+- Four-role access control: Admin, Manager, Member, Viewer / Auditor
+- Admin user management: create, edit, deactivate, reactivate and delete
+- One-time temporary passwords with a required change at first sign-in
+- Safeguards against self-lockout and removing the last admin
+- Synthetic demo seed data, blocked outside development/test/demo
 - PostgreSQL persistence
 - SQLAlchemy ORM
 - Docker Compose development environment
@@ -80,11 +83,27 @@ Swagger Docs:
 http://127.0.0.1:8002/docs
 ```
 
-Run tests:
+Run tests (against a separate test database — see the [Setup Guide](./docs/setup.md#running-tests)):
 
 ```bash
-docker compose exec api pytest
+docker compose exec db createdb -U postgres secure_user_api_test_db
+docker compose exec \
+  -e DATABASE_URL=postgresql://postgres:postgres@db:5432/secure_user_api_test_db \
+  api pytest
 ```
+
+## Roles
+
+| Role | Can |
+| --- | --- |
+| Admin | Manage users and roles |
+| Manager | Handle access requests; view team activity |
+| Member | Use the service; submit access requests |
+| Viewer / Auditor | Read activity and audit records, without changing data |
+
+Existing `admin` accounts stay Admins and existing `user` accounts become
+Members. See the [API Reference](./docs/api-reference.md) for the full
+permission matrix, endpoints and the breaking changes in this release.
 
 ## Documentation
 
@@ -94,7 +113,7 @@ For more detailed project documentation this is available in the `docs/` folder.
 | --- | --- |
 | [Setup Guide](./docs/setup.md) | Environment variables, Docker setup, manual setup, and test commands |
 | [API Reference](./docs/api-reference.md) | Main API endpoints and route notes |
-| [Auth Flow](./docs/auth-flow.md) | JWT authentication, protected routes, and admin-only access |
+| [Auth Flow](./docs/auth-flow.md) | JWT authentication, roles, account lifecycle and temporary passwords |
 | [Project Details](./docs/projects-details.md) | Architecture, limitations, future improvements, and learning notes |
 | [CI/CD Notes](./docs/ci-cd.md) | Backend CI and Docker CI workflow notes |
 
