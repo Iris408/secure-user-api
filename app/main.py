@@ -2,7 +2,9 @@ from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import engine, Base, get_db
-from app.models.user_model import User
+from app.migrations import run_migrations
+from app.models.user_model import User  # noqa: F401 - registers the table
+from app.routes.demo_routes import router as demo_router
 from app.routes.user_routes import router as user_router
 
 from sqlalchemy import text
@@ -42,7 +44,13 @@ app.add_middleware(
 
 Base.metadata.create_all(bind=engine)
 
+# EN: Bring existing tables up to date (additive, idempotent)
+# JP: 既存テーブルを最新化（追加のみ・冪等）
+# KR: 기존 테이블을 최신화 (추가 전용, 멱등)
+run_migrations(engine)
+
 app.include_router(user_router)
+app.include_router(demo_router)
 
 @app.get("/")
 def root():

@@ -1,6 +1,44 @@
-from pydantic import BaseModel
-from sqlalchemy import Column, Integer, String
+import re
+from typing import Optional
+
+from pydantic import BaseModel, field_validator
+from sqlalchemy import Boolean, Column, Integer, String, false, true
+
 from app.database import Base
+from app.permissions import parse_role
+
+
+USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9._-]{3,50}$")
+PASSWORD_MIN_LENGTH = 12
+# bcrypt only uses the first 72 bytes of a password
+PASSWORD_MAX_BYTES = 72
+
+
+def validate_username(value: str) -> str:
+    value = value.strip()
+
+    if not USERNAME_PATTERN.match(value):
+        raise ValueError(
+            "Username must be 3-50 characters: letters, numbers, '.', '_' or '-'"
+        )
+
+    return value
+
+
+def validate_password(value: str) -> str:
+    if len(value) < PASSWORD_MIN_LENGTH:
+        raise ValueError(
+            f"Password must be at least {PASSWORD_MIN_LENGTH} characters"
+        )
+
+    if len(value.encode("utf-8")) > PASSWORD_MAX_BYTES:
+        raise ValueError(f"Password must be at most {PASSWORD_MAX_BYTES} bytes")
+
+    return value
+
+
+def validate_role(value: str) -> str:
+    return parse_role(value).value
 
 
 # =========================================
@@ -11,16 +49,24 @@ from app.database import Base
 
 class UserRequest(BaseModel):
     username: str
-    password: str
-    role: str = "user"
+    # Optional: when omitted the server generates a one-time temporary
+    # password. Either way the user must change it at first sign-in.
+    password: Optional[str] = None
+    role: str = "member"
+
+    _check_username = field_validator("username")(validate_username)
+    _check_role = field_validator("role")(validate_role)
+
+    @field_validator("password")
+    @classmethod
+    def _check_password(cls, value):
+        return None if value is None else validate_password(value)
+
 
 class UserLoginRequest(BaseModel):
     username: str
     password: str
 
-class UserUpdateRequest(BaseModel):
-    username: str
-    role: str = "user"
 
 # =========================================
 # EN: Request model for updating a user
@@ -30,7 +76,17 @@ class UserUpdateRequest(BaseModel):
 
 class UserUpdateRequest(BaseModel):
     username: str
-    role: str = "user"
+    role: str = "member"
+
+    _check_username = field_validator("username")(validate_username)
+    _check_role = field_validator("role")(validate_role)
+
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+    _check_new_password = field_validator("new_password")(validate_password)
 
 
 # =========================================
@@ -58,7 +114,25 @@ class User(Base):
     # KR: 안전하게 저장되는 해시된 비밀번호
     hashed_password = Column(String)
 
-    # EN: User role, for example "user" or "admin"
-    # JP: ユーザー権限。例: "user" または "admin"
-    # KR: 사용자 역할. 예: "user" 또는 "admin"
-    role = Column(String, default="user")
+    # EN: Role: admin, manager, member or viewer. Legacy rows may still hold
+    #     "user" or "Admin"; app.permissions.normalize_role maps them.
+    # JP: ロール。旧データの "user" / "Admin" は normalize_role で変換
+    # KR: 역할. 기존 "user" / "Admin" 값은 normalize_role 로 변환
+    role = Column(String, default="member")
+
+    # EN: Deactivated users cannot sign in and their tokens stop working
+    # JP: 無効化されたユーザーはサインインできない
+    # KR: 비활성화된 사용자는 로그인할 수 없음
+    is_active = Column(Boolean, nullable=False, default=True, server_default=true())
+
+    # EN: Synthetic demo/test account created by scripts/seed_demo_users.py
+    # JP: デモ/テスト用の合成アカウント
+    # KR: 데모/테스트용 합성 계정
+    is_seed = Column(Boolean, nullable=False, default=False, server_default=false())
+
+    # EN: Set for admin-issued temporary passwords
+    # JP: 管理者が発行した一時パスワードの場合に設定
+    # KR: 관리자가 발급한 임시 비밀번호인 경우 설정
+    must_change_password = Column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
