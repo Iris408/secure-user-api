@@ -33,7 +33,9 @@ JWT backend deployed on Render:
 - Admin user management: create, edit, deactivate, reactivate and delete
 - One-time temporary passwords with a required change at first sign-in
 - Safeguards against self-lockout and removing the last admin
-- Synthetic demo seed data, blocked outside development/test/demo
+- Synthetic demo seed data, blocked outside development/test/demo; Render
+  seeding only for the dedicated demo database with explicit opt-ins
+  ([Setup Guide](./docs/setup.md#seeding-the-demo-database-on-render))
 - PostgreSQL persistence
 - SQLAlchemy ORM
 - Docker Compose development environment

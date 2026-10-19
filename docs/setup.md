@@ -175,19 +175,49 @@ Safeguards:
 The public demo must be a **separate deployment with its own database** —
 never the production API or database:
 
-1. Create a new database that contains no real accounts.
-2. Run the API against it with `APP_ENV=demo` and a `SECRET_KEY` that is
-   different from production (so demo tokens are useless in production).
-3. Seed it: `APP_ENV=demo DATABASE_URL=... python -m scripts.seed_demo_users`.
-   This adds the 124 synthetic users and the `demo.guide` account.
-4. Point the frontend's `VITE_DEMO_API_URL` at this deployment.
+1. Create a new, empty database for the demo only (for example
+   `accesshub_demo`). It must contain no real accounts.
+2. Run the demo API against it with `APP_ENV=demo` and a `SECRET_KEY` that is
+   different from production, so demo tokens are useless in production.
+3. Seed it (see below). This adds the 124 synthetic users and the
+   `adminDemoUser` demo admin, all with `is_seed=true`.
+4. Point the frontend's `VITE_DEMO_API_URL` at the demo deployment.
 
-`POST /demo/session` then issues a token for `demo.guide` without any
+`POST /demo/session` then issues a token for `adminDemoUser` without any
 credentials. It returns `404` unless `APP_ENV=demo`, and `503` whenever the
-database contains any non-demo account. Users created during a demo are
-stored as demo data, and no demo account can sign in with a password.
+database contains any non-seed account. Users created during a demo are
+stored as demo data, and no seed account — including `adminDemoUser` — can
+sign in with a password.
 
-The seed script refuses to run on Render or against a `*.render.com`
-database. To host the demo database on Render, seed it from a workstation
-through a non-Render hostname, or review and deliberately relax that guard;
-it is intentionally not configurable.
+### Seeding the demo database on Render
+
+The seed script **refuses Render targets by default** (when the `RENDER`
+environment variable is set or the database host ends in `.render.com`). The
+dedicated demo database can only be seeded when every one of these opt-ins is
+present:
+
+| Requirement | How |
+| --- | --- |
+| Demo environment | `APP_ENV=demo` |
+| Explicit opt-in | `--allow-render-demo` |
+| The intended database | `--expected-database <name>` must equal `SELECT current_database()` |
+| No real accounts | The database must contain no non-seed user rows (checked automatically; on a legacy table without `is_seed`, every row counts as real) |
+
+Safe command — use the **demo** database's connection string, never
+production's:
+
+```bash
+APP_ENV=demo \
+DATABASE_URL='<demo database external URL>' \
+python -m scripts.seed_demo_users --allow-render-demo --expected-database accesshub_demo
+```
+
+The database name and the real-account check are verified before any table
+is created or row written; if either fails, the script stops with exit code
+2 and changes nothing. It only ever creates `demo.*` users and
+`adminDemoUser`, skips names that already exist, refuses if a real account is
+already called `adminDemoUser`, and never modifies other accounts such as
+`adminuser` or `testuser`. Re-running it creates nothing new.
+
+To remove the demo data from that database, add `--remove` to the same
+command; only `is_seed` rows are deleted.

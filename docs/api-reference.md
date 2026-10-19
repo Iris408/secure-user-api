@@ -170,7 +170,7 @@ sign in.
 
 | Method | Endpoint | Description |
 | --- | --- | --- |
-| POST | `/demo/session` | `{access_token, token_type}` for the `demo.guide` account |
+| POST | `/demo/session` | `{access_token, token_type}` for the `adminDemoUser` demo admin |
 
 Only available when the API runs with `APP_ENV=demo` (otherwise `404`). It
 refuses with `503` while the database contains any non-demo (`is_seed:
