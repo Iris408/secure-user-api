@@ -563,3 +563,18 @@ false`) account, or when the demo hasn't been seeded. See the
 - New, additive: the `/access-requests` endpoints and the `access_requests`
   table. An approval also records `user.role_changed` with
   `reason: access_request` and the `request_id`.
+
+## Maintenance: restoring the public demo
+
+The public demo uses a shared database, so visitors can change its users,
+permissions and settings, and create access requests. A repeatable reset
+procedure is planned, but is not yet implemented.
+
+The procedure should restore the intended baseline for demo users, role
+permissions, organisation settings and seeded access requests. It must also
+define how to handle the append-only Audit Log and real Activity events:
+those records should not be silently replaced with fabricated history.
+
+Until a reset procedure is implemented and reviewed, restore the demo only
+through a deliberate, verified process against the dedicated demo database.
+Never run a reset or seed command against the production database.  
