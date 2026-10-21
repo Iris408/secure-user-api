@@ -9,6 +9,7 @@ A production-style FastAPI backend for secure user management, JWT authenticatio
 
 JWT backend deployed on Render:
 
+- [AccessHub frontend](https://accesshub-iris408.vercel.app)
 - [Root Endpoint](https://mini-user-api.onrender.com)
 - [Health Check](https://mini-user-api.onrender.com/health)
 - [Readiness Check](https://mini-user-api.onrender.com/ready)
@@ -24,7 +25,6 @@ JWT backend deployed on Render:
 | JWT authentication | ✅ Working | Backend tests | ✅ Auth, roles and user lifecycle |
 | Password hashing | ✅ Working | Backend CI | ✅ Passing |
 | Role-based access control | ✅ Working | Docker CI | ✅ Passing |
-
 
 ## Features
 
@@ -56,6 +56,14 @@ JWT backend deployed on Render:
 - Automated testing with pytest
 - Continuous integration with GitHub Actions
 
+## Maintenance Backlog
+
+- Add a guarded, operator-run reset for the hosted demo. Restore demo-owned
+  users, synthetic access requests, role permissions and organisation
+  settings to their defaults; refuse production, unexpected database names
+  and databases containing real accounts; preserve the append-only audit
+  history.
+
 ## Tech Stack
 
 | Area | Technologies |
@@ -70,7 +78,7 @@ JWT backend deployed on Render:
 
 | Swagger API Docs | GitHub Actions CI | Render Deployment |
 | --- | --- | --- |
-| ![Swagger API Docs](screenshots/01-swagger-docs.png) | ![GitHub Actions CI](screenshots/05-github-actions-ci.png) | ![Render Deployment](screenshots/06-render-deployment.png) |
+| ![Swagger API Docs](screenshots/api-docs.png) | ![GitHub Actions CI](screenshots/github-actions-ci.png) | ![Render Deployment](screenshots/render-deployment.png) |
 
 ## Quick Start
 
@@ -141,6 +149,7 @@ For more detailed project documentation this is available in the `docs/` folder.
 Secure User Management API is a backend portfolio project built to practise real API development skills: user authentication, JWT token handling, role-based access control, PostgreSQL persistence, Dockerized development, health checks, testing, deployment, and CI/CD validation.
 
 ## License
+
 This project is licensed under the terms in [MIT LICENSE](./LICENSE) file for details.
 
 ## Author

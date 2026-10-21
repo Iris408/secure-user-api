@@ -1,107 +1,85 @@
 # Project Details
 
-This document contains additional technical notes for Secure User Management API.
+This document describes the architecture, responsibilities and current
+maintenance scope of Secure User API.
 
 ## Architecture
 
 ```text
-FastAPI Backend
-      ↓
-SQLAlchemy ORM
-      ↓
-PostgreSQL Database
+AccessHub frontend
+        │ HTTPS
+        ▼
+FastAPI application
+        │
+        ├── Authentication, permissions and business rules
+        ├── SQLAlchemy models and database sessions
+        └── PostgreSQL
 ```
 
-## Backend Responsibilities
+The backend is maintained separately from the React and TypeScript AccessHub
+frontend. The production API and public demo API are separate Render services
+with separate database configurations. The demo uses `APP_ENV=demo` and a
+dedicated demo database.
 
-The backend is built with FastAPI and organized using modular route files.
+## Backend responsibilities
 
-Main backend responsibilities:
+The API is built with FastAPI and organized into route, model and policy
+modules. It is responsible for:
 
-- Handle API requests
-- Validate request and response data
-- Manage user registration and login
-- Hash passwords before storing them
-- Generate JWT access tokens
-- Protect authenticated routes
-- Restrict admin-only routes by role
-- Expose health and readiness endpoints
-- Provide Swagger API documentation
+- Validating API input and responses
+- Authenticating users and issuing JWT access tokens
+- Hashing passwords and enforcing temporary-password changes
+- Checking current accounts, roles and permissions against the database
+- Managing users and their account lifecycle
+- Handling access requests and role decisions
+- Enforcing configurable role permissions and organisation settings
+- Recording Activity and append-only Audit Log events
+- Providing health, readiness and OpenAPI documentation endpoints
+
+Authorization is enforced by the API on every request. Frontend visibility
+rules are for usability and do not replace server-side checks.
 
 ## Database
 
-PostgreSQL is used as the relational database.
+PostgreSQL stores users, access requests, role permission grants, organisation
+settings and audit events. SQLAlchemy defines models and manages database
+sessions.
 
-SQLAlchemy is used to:
+On startup, the application creates missing schema structures and adds
+default policy and settings rows without overwriting existing choices. Audit
+events are append-only; PostgreSQL triggers reject attempts to update, delete
+or truncate them.
 
-- Define database models
-- Connect FastAPI to PostgreSQL
-- Create and query user records
-- Manage database sessions
+The test suite must use a disposable database whose name contains `test`.
+Fixtures drop and recreate tables, and refuse to run against a database with
+a different name.
 
-## DevOps / Deployment
+## Authentication and authorization
 
-The project includes:
+The API uses bcrypt password hashes and signed JWT access tokens. Each
+authenticated request reloads the account and current permissions from the
+database, so account deactivation, role changes and permission changes take
+effect on the next request.
 
-- Docker Compose for local containerized development
-- Render for live backend deployment
-- GitHub Actions for backend CI and Docker CI
-- Swagger UI for live API testing
-- Health and readiness endpoints for deployment checks
+The four supported roles are Admin, Manager, Member and Viewer / Auditor.
+Admins retain all permissions. They can configure selected permissions for
+other roles within fixed safeguards. The API also enforces role-based rules
+for access request decisions, the Audit Log, role configuration and Settings.
 
-## Known Limitations
+See the [Auth Flow](./auth-flow.md) and
+[API Reference](./api-reference.md) for endpoint and policy details.
 
-- Free Render services may sleep after inactivity.
-- Refresh tokens are not implemented yet.
-- Password reset is not implemented yet.
-- Test coverage is currently basic.
-- Admin functionality is intentionally simple for portfolio scope.
-- CORS origins can be moved to environment variables later if needed.
+## Demo behavior
 
-## Future Improvements
+The public demo uses the separate demo API and database. `POST /demo/session`
+starts a session as `adminDemoUser` without a password. Seeded accounts cannot
+sign in with passwords.
 
-### Testing
+The demo is shared, so visitors can change users, role permissions and
+Settings, and submit or decide access requests. Activity and Audit Log pages
+show real events created by demo use rather than fabricated event history.
 
-- Expand authentication route tests
-- Add protected route tests
-- Add admin-only route tests
-- Add database integration tests
-
-### Authentication
-
-- Add refresh token support
-- Add password reset flow
-- Add email verification
-- Improve role-based access control
-
-### DevOps
-
-- Improve Docker production configuration
-- Add deployment automation improvements
-- Add structured logging
-- Add monitoring or uptime checks
-- Move CORS origins into environment variables if needed
-
-### Frontend Integration
-
-- Connect to a polished React/TypeScript frontend
-- Add demo user and demo admin login flow
-- Add frontend screenshots and demo walkthrough
-
-## What I Learned
-
-Through this project, I practiced:
-
-- FastAPI backend structure
-- REST API design
-- PostgreSQL database integration
-- SQLAlchemy ORM models
-- Password hashing
-- JWT authentication
-- OAuth2 token flow in Swagger
-- Protected routes
-- Role-based access control
-- Docker Compose development
-- Render deployment
-- pytest backend testing
-- GitHub Actions CI workflows
+A repeatable demo reset procedure is planned maintenance. It should restore
+demo users, permission defaults, organisation settings and seeded requests,
+and define how to handle append-only Audit Log records and real Activity
+events. The reset process is not implemented

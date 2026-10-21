@@ -351,3 +351,24 @@ already called `adminDemoUser`, and never modifies other accounts such as
 
 To remove the demo data from that database, add `--remove` to the same
 command; only `is_seed` rows are deleted.
+
+## Shared demo maintenance and reset
+
+The public demo is shared, so visitors can change its users, permissions,
+settings and access requests. There is no automatic reset procedure yet.
+
+The seed command is safe to rerun, but it does **not** restore the demo to its
+original state. Its `--remove` option deletes only seeded users and seeded
+requests; it does not reset saved role permissions or organisation settings,
+and it does not remove audit events.
+
+A reset procedure is planned maintenance. It should be tested against a
+throwaway copy first and should restore the intended demo users,
+`adminDemoUser`, role permission defaults, organisation settings and synthetic
+access requests. It must define how to handle the append-only Audit Log and
+real Activity events, rather than silently replacing real history with
+fabricated events.
+
+Until a reset process is implemented and reviewed, do not treat the seed
+command as a full reset. Any manual recovery must be deliberate, verified
+against the dedicated demo database, and kept separate from production.
