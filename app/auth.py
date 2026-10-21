@@ -4,15 +4,18 @@ import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 
+from app.audit import AuditEventType, AuditOutcome, record_event
 from app.database import get_db
 from app.models.user_model import User
-from app.permissions import Permission, has_permission, normalize_role, permissions_for
+from app.permissions import Permission, normalize_role
+from app.policy import resolve_permissions
+from app.settings import load_settings
 
 
 load_dotenv()
@@ -141,12 +144,12 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 30
 # KR: JWT 액세스 토큰 생성
 # =========================================
 
-def create_access_token(data: dict):
+def create_access_token(data: dict, expires_minutes: int = ACCESS_TOKEN_EXPIRE_MINUTES):
 
     token_data = data.copy()
 
     expire = datetime.now(timezone.utc) + timedelta(
-        minutes=ACCESS_TOKEN_EXPIRE_MINUTES
+        minutes=expires_minutes
     )
 
     token_data.update(
@@ -164,15 +167,18 @@ def create_access_token(data: dict):
     return encoded_jwt
 
 
-def create_user_token(user: User) -> str:
+def create_user_token(user: User, db: Session) -> str:
     # `uid` lets the token survive a username change; `role` is informational
-    # only — permissions are always re-read from the database.
+    # only — permissions are always re-read from the database. The lifetime is
+    # the organisation's session setting at sign-in; a token keeps the expiry
+    # it was issued with, so a change applies to new sessions.
     return create_access_token(
         data={
             "sub": user.username,
             "uid": user.id,
             "role": normalize_role(user.role).value,
-        }
+        },
+        expires_minutes=load_settings(db).session_minutes,
     )
 
 
@@ -218,13 +224,15 @@ class CurrentUser:
     username: str
     role: str
     must_change_password: bool
+    # Resolved from the persisted policy when the request is authenticated.
+    granted: frozenset = frozenset()
 
     @property
     def permissions(self) -> list:
-        return permissions_for(self.role)
+        return sorted(permission.value for permission in self.granted)
 
     def can(self, permission: Permission) -> bool:
-        return has_permission(self.role, permission)
+        return permission in self.granted
 
 
 INVALID_TOKEN = HTTPException(
@@ -259,11 +267,15 @@ def get_current_user(
     if user is None or not user.is_active:
         raise INVALID_TOKEN
 
+    role = normalize_role(user.role)
+
     return CurrentUser(
         id=user.id,
         username=user.username,
-        role=normalize_role(user.role).value,
+        role=role.value,
         must_change_password=bool(user.must_change_password),
+        # Current policy for the current database role, on every request.
+        granted=resolve_permissions(db, role),
     )
 
 
@@ -287,15 +299,54 @@ def get_active_user(
 # KR: 권한 확인
 # =========================================
 
+FORBIDDEN_DETAIL = "You don't have permission to perform this action"
+
+
+def route_label(request: Request) -> str:
+    """'METHOD /path/{param}' — the route template, never raw IDs or queries."""
+    route = request.scope.get("route")
+    path = getattr(route, "path", None) or request.url.path
+    return f"{request.method} {path}"
+
+
+def deny_access(
+    db: Session,
+    request: Request,
+    current_user: CurrentUser,
+    permission: Permission,
+    reason: str = "missing_permission",
+):
+    """Record an access.denied audit event, then refuse with 403."""
+
+    record_event(
+        db,
+        AuditEventType.ACCESS_DENIED,
+        AuditOutcome.DENIED,
+        actor=current_user,
+        details={
+            "permission": permission.value,
+            "action": route_label(request),
+            "reason": reason,
+        },
+    )
+    db.commit()
+
+    raise HTTPException(status_code=403, detail=FORBIDDEN_DETAIL)
+
+
 def require_permission(permission: Permission):
 
-    def dependency(current_user: CurrentUser = Depends(get_active_user)):
+    def dependency(
+        request: Request,
+        current_user: CurrentUser = Depends(get_active_user),
+        db: Session = Depends(get_db),
+    ):
 
+        # Signed-in users reaching a route they lack permission for is a
+        # security-relevant event (the UI never offers these actions), so it
+        # is audited.
         if not current_user.can(permission):
-            raise HTTPException(
-                status_code=403,
-                detail="You don't have permission to perform this action"
-            )
+            deny_access(db, request, current_user, permission)
 
         return current_user
 

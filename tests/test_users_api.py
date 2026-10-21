@@ -308,7 +308,7 @@ def test_role_change_applies_immediately(client, make_user, login):
     assert response.json()["user"]["role"] == "viewer"
     # Existing token, new permissions.
     permissions = client.get("/profile", headers=member_headers).json()["user"]["permissions"]
-    assert permissions == ["activity:read_all", "audit:read"]
+    assert permissions == ["activity:read"]
 
 
 def test_admins_cannot_change_their_own_role(client, make_user, login):

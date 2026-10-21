@@ -26,7 +26,16 @@ from fastapi.testclient import TestClient  # noqa: E402
 from app.auth import hash_password  # noqa: E402
 from app.database import Base, SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
-from app.migrations import run_migrations  # noqa: E402
+from app.migrations import (  # noqa: E402
+    ensure_audit_log_append_only,
+    ensure_role_permission_defaults,
+    ensure_settings_row,
+    run_migrations,
+)
+from app.models.access_request_model import AccessRequest  # noqa: E402,F401
+from app.models.audit_model import AuditEvent  # noqa: E402,F401
+from app.models.role_permission_model import RolePermissionGrant  # noqa: E402,F401
+from app.models.settings_model import OrganisationSettings  # noqa: E402,F401
 from app.models.user_model import User  # noqa: E402
 
 
@@ -38,6 +47,9 @@ def clean_database():
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     run_migrations(engine)
+    ensure_audit_log_append_only(engine)
+    ensure_role_permission_defaults(engine)
+    ensure_settings_row(engine)
     yield
 
 

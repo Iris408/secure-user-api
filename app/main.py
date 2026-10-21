@@ -2,9 +2,23 @@ from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import engine, Base, get_db
-from app.migrations import run_migrations
+from app.migrations import (
+    ensure_audit_log_append_only,
+    ensure_role_permission_defaults,
+    ensure_settings_row,
+    run_migrations,
+)
+from app.models.access_request_model import AccessRequest  # noqa: F401 - registers the table
+from app.models.audit_model import AuditEvent  # noqa: F401 - registers the table
+from app.models.role_permission_model import RolePermissionGrant  # noqa: F401 - registers the table
+from app.models.settings_model import OrganisationSettings  # noqa: F401 - registers the table
 from app.models.user_model import User
+from app.routes.access_request_routes import router as access_request_router
+from app.routes.activity_routes import router as activity_router
+from app.routes.audit_routes import router as audit_router
 from app.routes.demo_routes import router as demo_router
+from app.routes.role_permission_routes import router as role_permission_router
+from app.routes.settings_routes import router as settings_router
 from app.routes.user_routes import router as user_router
 
 from sqlalchemy import text
@@ -33,6 +47,7 @@ origins = [
 
     "https://jwt-authentication-dashboard-sepia.vercel.app",
     "https://accesshub-7jy6awsnz-iris408.vercel.app",
+    "https://accesshub-iris408.vercel.app",
 
 ]
 
@@ -50,9 +65,17 @@ Base.metadata.create_all(bind=engine)
 # JP: 既存テーブルを最新化（追加のみ・冪等）
 # KR: 기존 테이블을 최신화 (추가 전용, 멱등)
 run_migrations(engine)
+ensure_audit_log_append_only(engine)
+ensure_role_permission_defaults(engine)
+ensure_settings_row(engine)
 
 app.include_router(user_router)
 app.include_router(demo_router)
+app.include_router(audit_router)
+app.include_router(access_request_router)
+app.include_router(role_permission_router)
+app.include_router(activity_router)
+app.include_router(settings_router)
 
 @app.get("/")
 def root():

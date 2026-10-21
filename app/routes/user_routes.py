@@ -22,6 +22,7 @@ from app.auth import (
     require_permission,
     verify_password
 )
+from app.audit import AuditEventType, AuditOutcome, record_event
 from app.demo_seed import demo_mode
 from app.permissions import Permission, Role, normalize_role
 
@@ -87,16 +88,16 @@ def is_active_admin(user: User) -> bool:
     )
 
 
-def ensure_another_active_admin(db: Session, user: User, detail: str):
+def is_last_active_admin(db: Session, user: User) -> bool:
     """
-    Refuse a change that would leave no active admin who can sign in. Seed
-    accounts never count: they can't sign in. Admin rows are locked
-    (SELECT ... FOR UPDATE on PostgreSQL) so two concurrent requests can't
-    each remove "the other" last admin.
+    Whether removing this user's admin access would leave no active admin who
+    can sign in. Seed accounts never count: they can't sign in. Admin rows are
+    locked (SELECT ... FOR UPDATE on PostgreSQL) so two concurrent requests
+    can't each remove "the other" last admin.
     """
 
     if not is_active_admin(user):
-        return
+        return False
 
     active_admin_ids = db.query(User.id).filter(
         func.lower(func.trim(User.role)) == Role.ADMIN.value,
@@ -104,8 +105,25 @@ def ensure_another_active_admin(db: Session, user: User, detail: str):
         User.is_seed.is_(False)
     ).with_for_update().all()
 
-    if len(active_admin_ids) <= 1:
+    return len(active_admin_ids) <= 1
+
+
+def ensure_another_active_admin(db: Session, user: User, detail: str):
+    """Refuse (409) a change that would leave no active admin."""
+
+    if is_last_active_admin(db, user):
         raise conflict(detail)
+
+
+def refuse(db: Session, event_type, actor, target, reason: str, detail: str):
+    """Audit a safeguard refusal, then respond 409 with the existing message."""
+
+    record_event(
+        db, event_type, AuditOutcome.DENIED,
+        actor=actor, target=target, details={"reason": reason},
+    )
+    db.commit()
+    raise conflict(detail)
 
 
 INVALID_CREDENTIALS = HTTPException(
@@ -114,26 +132,45 @@ INVALID_CREDENTIALS = HTTPException(
 )
 
 
-def authenticate(db: Session, username: str, password: str) -> User:
+def failed_sign_in(db: Session, target, reason: str, method: str):
+    # Unknown usernames are not recorded: the typed text could be a password
+    # entered in the wrong field.
+    record_event(
+        db, AuditEventType.SIGN_IN, AuditOutcome.FAILURE,
+        target=target, details={"reason": reason, "method": method},
+    )
+    db.commit()
+
+
+def authenticate(db: Session, username: str, password: str, method: str) -> User:
 
     user = db.query(User).filter(
         User.username == username
     ).first()
 
-    # Seed accounts are demo data only and can never sign in.
-    if user is None or user.is_seed:
+    if user is None:
+        failed_sign_in(db, None, "invalid_credentials", method)
         raise INVALID_CREDENTIALS
 
-    if not verify_password(password, user.hashed_password):
+    # Seed accounts are demo data only and can never sign in.
+    if user.is_seed or not verify_password(password, user.hashed_password):
+        failed_sign_in(db, user, "invalid_credentials", method)
         raise INVALID_CREDENTIALS
 
     # Checked after the password so account status isn't revealed to
     # someone who doesn't know the password.
     if not user.is_active:
+        failed_sign_in(db, user, "account_deactivated", method)
         raise HTTPException(
             status_code=403,
             detail="Account is deactivated"
         )
+
+    record_event(
+        db, AuditEventType.SIGN_IN, AuditOutcome.SUCCESS,
+        actor=user, target=user, details={"method": method},
+    )
+    db.commit()
 
     return user
 
@@ -174,6 +211,14 @@ def create_user(
     )
 
     db.add(new_user)
+    db.flush()
+
+    record_event(
+        db, AuditEventType.USER_CREATED, AuditOutcome.SUCCESS,
+        actor=current_user, target=new_user,
+        details={"role": new_user.role, "password_generated": generated},
+    )
+
     db.commit()
     db.refresh(new_user)
 
@@ -204,10 +249,10 @@ def login_user(
     db: Session = Depends(get_db)
 ):
 
-    user = authenticate(db, request.username, request.password)
+    user = authenticate(db, request.username, request.password, "password")
 
     return {
-        "access_token": create_user_token(user),
+        "access_token": create_user_token(user, db),
         "token_type": "bearer"
     }
 
@@ -224,10 +269,10 @@ def login_for_access_token(
     db: Session = Depends(get_db)
 ):
 
-    user = authenticate(db, form_data.username, form_data.password)
+    user = authenticate(db, form_data.username, form_data.password, "oauth2_form")
 
     return {
-        "access_token": create_user_token(user),
+        "access_token": create_user_token(user, db),
         "token_type": "bearer"
     }
 
@@ -273,13 +318,22 @@ def change_password(
     user = find_user_or_404(db, current_user.id)
 
     # 400 rather than 401: a wrong current password must not end the session.
+    def failed(reason: str):
+        record_event(
+            db, AuditEventType.PASSWORD_CHANGED, AuditOutcome.FAILURE,
+            actor=current_user, target=user, details={"reason": reason},
+        )
+        db.commit()
+
     if not verify_password(request.current_password, user.hashed_password):
+        failed("incorrect_current_password")
         raise HTTPException(
             status_code=400,
             detail="Current password is incorrect"
         )
 
     if request.new_password == request.current_password:
+        failed("password_unchanged")
         raise HTTPException(
             status_code=400,
             detail="New password must be different from the current password"
@@ -287,6 +341,11 @@ def change_password(
 
     user.hashed_password = hash_password(request.new_password)
     user.must_change_password = False
+
+    record_event(
+        db, AuditEventType.PASSWORD_CHANGED, AuditOutcome.SUCCESS,
+        actor=current_user, target=user,
+    )
 
     db.commit()
 
@@ -357,10 +416,12 @@ def update_user(
     role_changes = new_role != normalize_role(user.role)
 
     if role_changes and user.id == current_user.id:
-        raise conflict("You can't change your own role")
+        refuse(db, AuditEventType.ROLE_CHANGED, current_user, user,
+               "own_role", "You can't change your own role")
 
-    if role_changes and new_role != Role.ADMIN:
-        ensure_another_active_admin(db, user, "Cannot remove the last active admin")
+    if role_changes and new_role != Role.ADMIN and is_last_active_admin(db, user):
+        refuse(db, AuditEventType.ROLE_CHANGED, current_user, user,
+               "last_active_admin", "Cannot remove the last active admin")
 
     if username_taken(db, request.username, exclude_id=user.id):
         raise HTTPException(
@@ -368,8 +429,25 @@ def update_user(
             detail="Username already exists"
         )
 
+    old_username = user.username
+    old_role = normalize_role(user.role).value
+
     user.username = request.username
     user.role = new_role.value
+
+    if old_username != user.username:
+        record_event(
+            db, AuditEventType.USER_UPDATED, AuditOutcome.SUCCESS,
+            actor=current_user, target=user,
+            details={"from_username": old_username, "to_username": user.username},
+        )
+
+    if role_changes:
+        record_event(
+            db, AuditEventType.ROLE_CHANGED, AuditOutcome.SUCCESS,
+            actor=current_user, target=user,
+            details={"from_role": old_role, "to_role": new_role.value},
+        )
 
     db.commit()
     db.refresh(user)
@@ -396,11 +474,19 @@ def deactivate_user(
     user = find_user_or_404(db, user_id)
 
     if user.id == current_user.id:
-        raise conflict("You can't deactivate your own account")
+        refuse(db, AuditEventType.USER_DEACTIVATED, current_user, user,
+               "own_account", "You can't deactivate your own account")
 
-    ensure_another_active_admin(db, user, "Cannot deactivate the last active admin")
+    if is_last_active_admin(db, user):
+        refuse(db, AuditEventType.USER_DEACTIVATED, current_user, user,
+               "last_active_admin", "Cannot deactivate the last active admin")
 
     user.is_active = False
+
+    record_event(
+        db, AuditEventType.USER_DEACTIVATED, AuditOutcome.SUCCESS,
+        actor=current_user, target=user,
+    )
 
     db.commit()
     db.refresh(user)
@@ -420,6 +506,11 @@ def reactivate_user(
 
     user = find_user_or_404(db, user_id)
     user.is_active = True
+
+    record_event(
+        db, AuditEventType.USER_REACTIVATED, AuditOutcome.SUCCESS,
+        actor=current_user, target=user,
+    )
 
     db.commit()
     db.refresh(user)
@@ -446,14 +537,23 @@ def delete_user(
     user = find_user_or_404(db, user_id)
 
     if user.id == current_user.id:
-        raise conflict("You can't delete your own account")
+        refuse(db, AuditEventType.USER_DELETED, current_user, user,
+               "own_account", "You can't delete your own account")
 
     # Deletion is a separate, deliberate second step after deactivation, which
     # also guarantees an active admin can never be deleted.
     if user.is_active:
-        raise conflict("Deactivate the user before deleting them permanently")
+        refuse(db, AuditEventType.USER_DELETED, current_user, user,
+               "still_active", "Deactivate the user before deleting them permanently")
 
     deleted_user = user_to_dict(user)
+
+    # The event keeps a snapshot of the deleted account's id and username.
+    record_event(
+        db, AuditEventType.USER_DELETED, AuditOutcome.SUCCESS,
+        actor=current_user, target=user,
+        details={"role": normalize_role(user.role).value},
+    )
 
     db.delete(user)
     db.commit()

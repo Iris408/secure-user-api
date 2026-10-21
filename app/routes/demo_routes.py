@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.audit import AuditEventType, AuditOutcome, record_event
 from app.auth import create_user_token
 from app.database import get_db
 from app.demo_seed import DEMO_ADMIN_USERNAME, demo_mode
@@ -32,6 +33,11 @@ def start_demo_session(db: Session = Depends(get_db)):
     real_accounts = db.query(User).filter(User.is_seed.is_(False)).count()
 
     if real_accounts:
+        record_event(
+            db, AuditEventType.DEMO_SESSION, AuditOutcome.DENIED,
+            details={"reason": "real_accounts_present"},
+        )
+        db.commit()
         raise HTTPException(
             status_code=503,
             detail="Demo sessions are disabled: this database contains non-demo accounts"
@@ -49,7 +55,13 @@ def start_demo_session(db: Session = Depends(get_db)):
             detail="Demo environment is not seeded"
         )
 
+    record_event(
+        db, AuditEventType.DEMO_SESSION, AuditOutcome.SUCCESS,
+        actor=demo_admin, details={"method": "demo_session"},
+    )
+    db.commit()
+
     return {
-        "access_token": create_user_token(demo_admin),
+        "access_token": create_user_token(demo_admin, db),
         "token_type": "bearer"
     }
