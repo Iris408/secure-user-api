@@ -33,6 +33,20 @@ JWT backend deployed on Render:
 - Admin user management: create, edit, deactivate, reactivate and delete
 - One-time temporary passwords with a required change at first sign-in
 - Safeguards against self-lockout and removing the last admin
+- Organisation settings for Admins: organisation name, timezone, access
+  request policy (on/off and which non-Admin roles can be requested) and
+  session length, validated and enforced by the API and audited
+- Organisation activity feed (`GET /activity`): sign-ins and access events
+  for Admins, Managers and Viewers / Auditors by default, without the audit
+  log's internal detail
+- Configurable role permissions: Admins choose what Managers, Members and
+  Viewers / Auditors may do, within fixed safeguards (Admin keeps full
+  access; user management, the audit log and the policy itself stay
+  Admin-only). Enforced by the API on every request and audited
+- Access requests: members and managers ask for a role change, managers and
+  admins approve or decline it, with full decision history
+- Append-only audit log of sign-ins and administrative changes, readable by
+  admins through `GET /audit-events`
 - Synthetic demo seed data, blocked outside development/test/demo; Render
   seeding only for the dedicated demo database with explicit opt-ins
   ([Setup Guide](./docs/setup.md#seeding-the-demo-database-on-render))
@@ -98,13 +112,16 @@ docker compose exec \
 
 | Role | Can |
 | --- | --- |
-| Admin | Manage users and roles |
-| Manager | Handle access requests; view team activity |
-| Member | Use the service; submit access requests |
-| Viewer / Auditor | Read activity and audit records, without changing data |
+| Admin | Manage users, roles and role permissions; read the audit log; decide every access request |
+| Manager | Decide Member and Viewer / Auditor access requests; view organisation activity |
+| Member | Use the service; submit access requests and see their own |
+| Viewer / Auditor | Read-only: view organisation activity; no user management or request decisions |
 
 Existing `admin` accounts stay Admins and existing `user` accounts become
-Members. See the [API Reference](./docs/api-reference.md) for the full
+Members. These are the defaults: Admins can let Managers, Members or
+Viewers / Auditors view the user directory, and adjust who submits and reviews
+access requests and who sees activity, within the fixed safeguards. See the
+[API Reference](./docs/api-reference.md#roles-and-permissions) for the
 permission matrix, endpoints and the breaking changes in this release.
 
 ## Documentation

@@ -2,12 +2,15 @@ import os
 import random
 import secrets
 
+from datetime import datetime, timedelta, timezone
+
 from urllib.parse import urlparse
 
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
 from app.auth import hash_password
+from app.models.access_request_model import AccessRequest, AccessRequestStatus
 from app.models.user_model import User
 from app.permissions import Role
 
@@ -236,6 +239,10 @@ def remove_demo_users(db: Session, environ=None, allow_render_demo: bool = False
 
     assert_seed_allowed(environ, allow_render_demo)
 
+    # Synthetic access requests belong to synthetic users; remove them first.
+    db.query(AccessRequest).filter(AccessRequest.is_seed.is_(True)).delete(
+        synchronize_session=False
+    )
     removed = db.query(User).filter(User.is_seed.is_(True)).delete(
         synchronize_session=False
     )
@@ -272,3 +279,128 @@ def ensure_demo_admin(db: Session, environ=None, allow_render_demo: bool = False
     ))
     db.commit()
     return True
+
+
+# =========================================
+# EN: Synthetic access-request history (demo only)
+# JP: 合成アクセス申請履歴（デモ専用）
+# KR: 합성 접근 요청 기록 (데모 전용)
+# =========================================
+#
+# Deterministic: the same synthetic users always get the same requests.
+# Approved requests explain how a user reached the role they were seeded
+# with, and declined/pending requests leave roles alone, so the seeded role
+# distribution is unchanged. No audit events are invented for this history.
+
+DEMO_REQUEST_REASONS = [
+    "Leading the onboarding project for the new support team.",
+    "Covering approvals while my team lead is on leave.",
+    "Need read-only access to review last quarter's audit trail.",
+    "Joining the operations rota and need standard access.",
+    "Taking over reporting for the finance team.",
+    "Temporary audit support for the security review.",
+    "Moving from the pilot group to the main team.",
+    "Owning access reviews for the regional office.",
+]
+
+DEMO_DECISION_NOTES = [
+    "Approved for the duration of the project.",
+    None,
+    "Confirmed with the team lead.",
+    "Please re-apply once the project is approved.",
+    None,
+    "Read-only access is enough for this task.",
+]
+
+# (status, requester's seeded role, role they had before / now ask for)
+DEMO_REQUEST_PLAN = [
+    # Approved: how these users reached their current role.
+    *[(AccessRequestStatus.APPROVED, Role.MANAGER, Role.MEMBER)] * 4,
+    *[(AccessRequestStatus.APPROVED, Role.VIEWER, Role.MEMBER)] * 3,
+    *[(AccessRequestStatus.APPROVED, Role.MEMBER, Role.VIEWER)] * 3,
+    # Declined: the role they asked for, which they don't have.
+    *[(AccessRequestStatus.DECLINED, Role.MEMBER, Role.MANAGER)] * 3,
+    *[(AccessRequestStatus.DECLINED, Role.VIEWER, Role.MEMBER)] * 3,
+    # Pending: waiting for a reviewer.
+    *[(AccessRequestStatus.PENDING, Role.MEMBER, Role.MANAGER)] * 3,
+    *[(AccessRequestStatus.PENDING, Role.MEMBER, Role.VIEWER)] * 2,
+    *[(AccessRequestStatus.PENDING, Role.VIEWER, Role.MEMBER)] * 3,
+]
+
+
+def seed_demo_access_requests(
+    db: Session, environ=None, allow_render_demo: bool = False
+) -> int:
+    """Create the synthetic request history once. Returns how many."""
+
+    assert_seed_allowed(environ, allow_render_demo)
+
+    if db.query(AccessRequest.id).filter(AccessRequest.is_seed.is_(True)).first():
+        return 0
+
+    synthetic = (
+        db.query(User)
+        .filter(User.is_seed.is_(True), User.username.like(f"{SEED_PREFIX}%"))
+        .order_by(User.username)
+        .all()
+    )
+    by_role = {role: [u for u in synthetic if u.role == role.value] for role in Role}
+    reviewers = {
+        Role.ADMIN: [u for u in by_role[Role.ADMIN] if u.is_active],
+        Role.MANAGER: [u for u in by_role[Role.MANAGER] if u.is_active],
+    }
+
+    if not reviewers[Role.ADMIN] or not reviewers[Role.MANAGER]:
+        return 0
+
+    anchor = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    used = {role: 0 for role in Role}
+    created = 0
+
+    for index, (status, seeded_role, other_role) in enumerate(DEMO_REQUEST_PLAN):
+        candidates = [
+            u for u in by_role[seeded_role]
+            # Pending requests come from active accounts only.
+            if status != AccessRequestStatus.PENDING or u.is_active
+        ]
+        if used[seeded_role] >= len(candidates):
+            continue
+
+        requester = candidates[used[seeded_role]]
+        used[seeded_role] += 1
+
+        if status == AccessRequestStatus.APPROVED:
+            role_before, requested = other_role, seeded_role
+        else:
+            role_before, requested = seeded_role, other_role
+
+        submitted_at = anchor - timedelta(days=2 + (len(DEMO_REQUEST_PLAN) - index) * 2, hours=index % 7)
+        if status == AccessRequestStatus.PENDING:
+            submitted_at = anchor - timedelta(hours=3 + index * 5)
+
+        request = AccessRequest(
+            submitted_at=submitted_at,
+            requester_id=requester.id,
+            requester_username=requester.username,
+            requester_role=role_before.value,
+            requested_role=requested.value,
+            reason=DEMO_REQUEST_REASONS[index % len(DEMO_REQUEST_REASONS)],
+            status=status,
+            is_seed=True,
+        )
+
+        if status != AccessRequestStatus.PENDING:
+            # Only admins decide Manager-access requests.
+            pool = reviewers[Role.ADMIN] if requested == Role.MANAGER else reviewers[Role.MANAGER]
+            reviewer = pool[index % len(pool)]
+            request.reviewer_id = reviewer.id
+            request.reviewer_username = reviewer.username
+            request.reviewer_role = reviewer.role
+            request.decided_at = submitted_at + timedelta(hours=4 + index % 20)
+            request.decision_note = DEMO_DECISION_NOTES[index % len(DEMO_DECISION_NOTES)]
+
+        db.add(request)
+        created += 1
+
+    db.commit()
+    return created

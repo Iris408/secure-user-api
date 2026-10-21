@@ -25,6 +25,7 @@ from app.demo_seed import (
     ensure_demo_admin,
     is_render_target,
     remove_demo_users,
+    seed_demo_access_requests,
     seed_demo_users,
     verify_demo_database,
 )
@@ -76,11 +77,13 @@ def main(argv=None) -> int:
             else:
                 created = seed_demo_users(db, count=args.count, **options)
                 demo_admin = ensure_demo_admin(db, **options)
+                requests = seed_demo_access_requests(db, **options)
                 print(
                     f"Created {created} demo users (is_seed=true)"
                     f"{' and adminDemoUser' if demo_admin else ''}. "
                     "Demo accounts cannot sign in with a password."
                 )
+                print(f"Added {requests} synthetic access requests (is_seed=true).")
         except SeedNotAllowed as error:
             print(f"Refusing to run: {error}", file=sys.stderr)
             return 2

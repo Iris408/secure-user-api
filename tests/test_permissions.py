@@ -5,27 +5,28 @@ from app.permissions import (
     Role,
     normalize_role,
     parse_role,
-    permissions_for,
+    default_permissions_for,
 )
 
 
 def test_role_permission_matrix():
     # The agreed boundaries, spelled out so any change is deliberate.
-    assert permissions_for("admin") == sorted(p.value for p in Permission)
-    assert permissions_for("manager") == [
+    assert default_permissions_for("admin") == sorted(p.value for p in Permission)
+    assert default_permissions_for("manager") == [
         "access_requests:review",
         "access_requests:submit",
-        "activity:read_team",
+        "activity:read",
     ]
-    assert permissions_for("member") == ["access_requests:submit"]
-    assert permissions_for("viewer") == ["activity:read_all", "audit:read"]
+    assert default_permissions_for("member") == ["access_requests:submit"]
+    # audit:read is Admin-only by policy (the audit log always required Admin).
+    assert default_permissions_for("viewer") == ["activity:read"]
 
 
 def test_only_admin_can_manage_or_read_users():
     for role in Role:
         allowed = role is Role.ADMIN
-        assert ("users:manage" in permissions_for(role)) is allowed
-        assert ("users:read" in permissions_for(role)) is allowed
+        assert ("users:manage" in default_permissions_for(role)) is allowed
+        assert ("users:read" in default_permissions_for(role)) is allowed
 
 
 def test_viewer_has_no_write_permissions():
@@ -34,7 +35,7 @@ def test_viewer_has_no_write_permissions():
         Permission.ACCESS_REQUESTS_SUBMIT.value,
         Permission.ACCESS_REQUESTS_REVIEW.value,
     }
-    assert write_permissions.isdisjoint(permissions_for("viewer"))
+    assert write_permissions.isdisjoint(default_permissions_for("viewer"))
 
 
 @pytest.mark.parametrize(
